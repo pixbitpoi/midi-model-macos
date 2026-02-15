@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Union, Optional
 
 import gradio as gr
+import gradio_client.utils as gradio_client_utils
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -22,6 +23,45 @@ from midi_synthesizer import MidiSynthesizer
 from midi_tokenizer import MIDITokenizerV1, MIDITokenizerV2
 
 MAX_SEED = np.iinfo(np.int32).max
+
+
+def _patch_gradio_json_schema_parser():
+    # Gradio 5.9.x may crash when JSON Schema contains boolean nodes.
+    original = gradio_client_utils.json_schema_to_python_type
+
+    def normalize_schema(node):
+        if isinstance(node, bool):
+            return {}
+        if isinstance(node, dict):
+            return {k: normalize_schema(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [normalize_schema(v) for v in node]
+        return node
+
+    def patched(schema):
+        return original(normalize_schema(schema))
+
+    gradio_client_utils.json_schema_to_python_type = patched
+
+
+_patch_gradio_json_schema_parser()
+
+
+def _resolve_device(requested_device: str) -> str:
+    device = (requested_device or "auto").lower()
+    if device == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        print(f"[warning] CUDA is not available; fallback to cpu (requested: {requested_device})")
+        return "cpu"
+    if device == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+        print("[warning] MPS is not available; fallback to cpu")
+        return "cpu"
+    return requested_device
 
 
 @torch.inference_mode()
@@ -131,6 +171,8 @@ def send_msgs(msgs):
 def run(tab, mid_seq, continuation_state, continuation_select, instruments, drum_kit, bpm, time_sig, key_sig, mid,
         midi_events,  reduce_cc_st, remap_track_channel, add_default_instr, remove_empty_channels, seed, seed_rand,
         gen_events, temp, top_p, top_k, allow_cc):
+    if model is None or tokenizer is None:
+        raise gr.Error("Model is not loaded. Select a model and click Load before Generate.")
     bpm = int(bpm)
     if time_sig == "auto":
         time_sig = None
@@ -298,6 +340,8 @@ def undo_continuation(mid_seq, continuation_state):
 
 def load_model(path, model_config, lora_path):
     global model, tokenizer
+    if not path:
+        return "please select a model path first"
     if model_config == "auto":
         config_path = Path(path).parent / "config.json"
         if config_path.exists():
@@ -365,10 +409,12 @@ key_signatures = ['C♭', 'A♭m', 'G♭', 'E♭m', 'D♭', 'B♭m', 'A♭', 'Fm
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=7860, help="gradio server port")
-    parser.add_argument("--device", type=str, default="cuda", help="device to run model")
+    parser.add_argument("--device", type=str, default="auto", help="device to run model (auto/cpu/cuda/mps)")
     parser.add_argument("--batch", type=int, default=4, help="batch size")
     parser.add_argument("--share", action="store_true", default=False, help="share gradio")
     opt = parser.parse_args()
+    opt.device = _resolve_device(opt.device)
+    print(f"[info] using device: {opt.device}")
     OUTPUT_BATCH_SIZE = opt.batch
     soundfont_path = hf_hub_download(repo_id="skytnt/midi-model", filename="soundfont.sf2")
     synthesizer = MidiSynthesizer(soundfont_path)
