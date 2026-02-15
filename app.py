@@ -168,6 +168,181 @@ def send_msgs(msgs):
     return json.dumps(msgs)
 
 
+def _coerce_int(value, default, min_value, max_value, name, warnings):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        warnings.append(f"{name}: invalid value, fallback to {default}")
+        return default
+    clamped = max(min_value, min(max_value, value))
+    if clamped != value:
+        warnings.append(f"{name}: clamped to {clamped}")
+    return clamped
+
+
+def _coerce_float(value, default, min_value, max_value, name, warnings):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        warnings.append(f"{name}: invalid value, fallback to {default}")
+        return default
+    clamped = max(min_value, min(max_value, value))
+    if clamped != value:
+        warnings.append(f"{name}: clamped to {clamped}")
+    return clamped
+
+
+def _coerce_bool(value, default, name, warnings):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    warnings.append(f"{name}: invalid value, fallback to {default}")
+    return default
+
+
+def parse_and_normalize_custom_prompt_json(json_text):
+    expected_root = "custom_prompt"
+    defaults = {
+        "instruments": [],
+        "drum_kit": "None",
+        "bpm": 0,
+        "time_signature": "auto",
+        "key_signature": "auto",
+        "seed": 0,
+        "random_seed": True,
+        "generate_max_n_midi_events": 512,
+        "temperature": 1.0,
+        "top_p": 0.94,
+        "top_k": 20,
+        "allow_midi_cc_event": True,
+    }
+    time_signature_choices = {"auto", "4/4", "2/4", "3/4", "6/4", "7/4",
+                              "2/2", "3/2", "4/2", "3/8", "5/8", "6/8", "7/8", "9/8", "12/8"}
+    key_signature_choices = ["auto"] + key_signatures
+    warnings = []
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON: {e.msg} (line {e.lineno}, col {e.colno})") from e
+    if not isinstance(data, dict):
+        raise ValueError("top-level JSON must be an object")
+
+    if expected_root in data:
+        tab = data.get("tab")
+        if tab not in (None, "custom_prompt"):
+            warnings.append(f"tab: '{tab}' ignored; custom_prompt applied")
+        payload = data[expected_root]
+    elif any(k in data for k in defaults.keys()):
+        payload = data
+    else:
+        raise ValueError("missing 'custom_prompt' object")
+    if not isinstance(payload, dict):
+        raise ValueError("'custom_prompt' must be an object")
+
+    instruments = payload.get("instruments", defaults["instruments"])
+    if instruments is None:
+        instruments = []
+    elif isinstance(instruments, str):
+        instruments = [instruments]
+    elif not isinstance(instruments, list):
+        warnings.append("instruments: invalid type, fallback to []")
+        instruments = []
+    valid_instruments = []
+    for instrument in instruments:
+        if instrument in patch2number:
+            valid_instruments.append(instrument)
+        else:
+            warnings.append(f"instruments: unknown value removed ({instrument})")
+    if len(valid_instruments) > 15:
+        valid_instruments = valid_instruments[:15]
+        warnings.append("instruments: truncated to 15 items")
+
+    drum_kit = payload.get("drum_kit", defaults["drum_kit"])
+    if drum_kit not in drum_kits2number and drum_kit != "None":
+        warnings.append("drum_kit: unknown value, fallback to None")
+        drum_kit = "None"
+
+    bpm = _coerce_int(payload.get("bpm", defaults["bpm"]), defaults["bpm"], 0, 255, "bpm", warnings)
+
+    time_signature = payload.get("time_signature", defaults["time_signature"])
+    if time_signature not in time_signature_choices:
+        warnings.append("time_signature: unknown value, fallback to auto")
+        time_signature = "auto"
+
+    key_signature = payload.get("key_signature", defaults["key_signature"])
+    if key_signature not in key_signature_choices:
+        warnings.append("key_signature: unknown value, fallback to auto")
+        key_signature = "auto"
+    seed = _coerce_int(payload.get("seed", defaults["seed"]), defaults["seed"], 0, MAX_SEED, "seed", warnings)
+    random_seed = _coerce_bool(payload.get("random_seed", defaults["random_seed"]),
+                               defaults["random_seed"], "random_seed", warnings)
+    generate_max_n_midi_events = _coerce_int(
+        payload.get("generate_max_n_midi_events", defaults["generate_max_n_midi_events"]),
+        defaults["generate_max_n_midi_events"],
+        1,
+        4096,
+        "generate_max_n_midi_events",
+        warnings,
+    )
+    temperature = _coerce_float(payload.get("temperature", defaults["temperature"]),
+                                defaults["temperature"], 0.1, 1.2, "temperature", warnings)
+    top_p = _coerce_float(payload.get("top_p", defaults["top_p"]), defaults["top_p"], 0.1, 1.0, "top_p", warnings)
+    top_k = _coerce_int(payload.get("top_k", defaults["top_k"]), defaults["top_k"], 1, 128, "top_k", warnings)
+    allow_midi_cc_event = _coerce_bool(payload.get("allow_midi_cc_event", defaults["allow_midi_cc_event"]),
+                                       defaults["allow_midi_cc_event"], "allow_midi_cc_event", warnings)
+
+    normalized = {
+        "instruments": valid_instruments,
+        "drum_kit": drum_kit,
+        "bpm": bpm,
+        "time_signature": time_signature,
+        "key_signature": key_signature,
+        "seed": seed,
+        "random_seed": random_seed,
+        "generate_max_n_midi_events": generate_max_n_midi_events,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "allow_midi_cc_event": allow_midi_cc_event,
+    }
+    return normalized, warnings
+
+
+def apply_custom_prompt_json(json_text):
+    no_change = tuple([gr.update()] * 12)
+    if not json_text or not json_text.strip():
+        return *no_change, "No JSON provided."
+    try:
+        normalized, warnings = parse_and_normalize_custom_prompt_json(json_text)
+    except ValueError as e:
+        return *no_change, f"Apply failed: {e}"
+    status = "Applied custom_prompt JSON."
+    if warnings:
+        status += "\n- " + "\n- ".join(warnings)
+    return (
+        normalized["instruments"],
+        normalized["drum_kit"],
+        normalized["bpm"],
+        normalized["time_signature"],
+        normalized["key_signature"],
+        normalized["seed"],
+        normalized["random_seed"],
+        normalized["generate_max_n_midi_events"],
+        normalized["temperature"],
+        normalized["top_p"],
+        normalized["top_k"],
+        normalized["allow_midi_cc_event"],
+        status,
+    )
+
+
 def run(tab, mid_seq, continuation_state, continuation_select, instruments, drum_kit, bpm, time_sig, key_sig, mid,
         midi_events,  reduce_cc_st, remap_track_channel, add_default_instr, remove_empty_channels, seed, seed_rand,
         gen_events, temp, top_p, top_k, allow_cc):
@@ -481,6 +656,14 @@ if __name__ == "__main__":
                     [["Electric Guitar(clean)", "Electric Guitar(muted)", "Overdriven Guitar", "Distortion Guitar",
                       "Electric Bass(finger)"], "Standard"]
                 ], [input_instruments, input_drum_kit])
+                with gr.Accordion("apply JSON", open=False):
+                    input_custom_json = gr.Textbox(
+                        label="Paste custom prompt JSON",
+                        lines=12,
+                        placeholder='{"tab":"custom_prompt","custom_prompt":{...}}',
+                    )
+                    apply_custom_json_btn = gr.Button("Apply JSON")
+                    apply_custom_json_status = gr.Textbox(label="Apply result", interactive=False)
             with gr.TabItem("midi prompt") as tab2:
                 input_midi = gr.File(label="input midi", file_types=[".midi", ".mid"], type="binary")
                 input_midi_events = gr.Slider(label="use first n midi events as prompt (all if 4097)", minimum=1,
@@ -540,6 +723,14 @@ if __name__ == "__main__":
                                         input_top_k, input_allow_cc],
                                   [output_midi_seq, output_continuation_state, input_seed, js_msg],
                                   concurrency_limit=10, queue=True)
+        apply_custom_json_btn.click(
+            apply_custom_prompt_json,
+            inputs=[input_custom_json],
+            outputs=[input_instruments, input_drum_kit, input_bpm, input_time_sig, input_key_sig,
+                     input_seed, input_seed_rand, input_gen_events, input_temp, input_top_p, input_top_k,
+                     input_allow_cc, apply_custom_json_status],
+            queue=False,
+        )
         finish_run_event = run_event.then(fn=finish_run,
                                           inputs=[output_midi_seq],
                                           outputs=midi_outputs + [js_msg],

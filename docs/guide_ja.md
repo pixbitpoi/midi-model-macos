@@ -6,7 +6,7 @@
 ## 1. 5分クイックスタート
 
 1. `Model option` でモデルを選び、`Load` を押して `success` を確認します。
-2. `custom prompt` タブで、下の「8曲風レシピ」から1つをそのまま入力します。
+2. `custom prompt` タブで、下の「8曲風レシピ」から1つをそのまま入力します（または `apply JSON` にLLM出力JSONを貼り付けて `Apply JSON`）。
 3. `generate` を押します。
 4. 良い結果が出たら `last output prompt` タブで続きを生成します。
 

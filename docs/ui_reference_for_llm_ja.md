@@ -6,7 +6,8 @@
 
 1. このドキュメントを LLM に渡す
 2. 「出力は JSON のみ」と指示する
-3. 返ってきた JSON を UI に手入力する
+3. `custom prompt` タブ内の `apply JSON` を開く
+4. JSON を貼り付けて `Apply JSON` を押す
 
 LLM への最短依頼例:
 
@@ -152,6 +153,9 @@ LLM への最短依頼例:
 - `instruments` の未知名は除外する
 - `drum_kit` は列挙値以外なら `None` にフォールバック
 - 再現重視なら `random_seed=false` を使う
+
+`Apply JSON` 実行時も同じ規則で自動補正されます。  
+補正が発生した場合は `Apply result` に警告が表示されます。
 
 ## 5. 実務向けの設定決定順（LLMに指示しやすい順）
 
