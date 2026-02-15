@@ -1,0 +1,21 @@
+{
+  "tab": "custom_prompt",
+  "custom_prompt": {
+    "instruments": [
+      "Acoustic Grand",
+      "String Ensemble 1",
+      "Cello"
+    ],
+    "drum_kit": "None",
+    "bpm": 80,
+    "time_signature": "4/4",
+    "key_signature": "Am",
+    "seed": 23021986,
+    "random_seed": false,
+    "generate_max_n_midi_events": 512,
+    "temperature": 0.88,
+    "top_p": 0.92,
+    "top_k": 14,
+    "allow_midi_cc_event": true
+  }
+}
